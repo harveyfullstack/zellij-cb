@@ -27,6 +27,7 @@ struct State {
     mode_info: ModeInfo,
     tab_line: Vec<LinePart>,
     session_directory: String,
+    is_updating: bool,
 }
 
 register_plugin!(State);
@@ -122,7 +123,9 @@ impl UserConfiguration {
             let fallback = if mode == InputMode::Locked {
                 String::new()
             } else {
-                mode_string.chars().next().unwrap().to_uppercase().collect()
+                mode_string.chars().next()
+                    .map(|c| c.to_uppercase().collect())
+                    .unwrap_or_else(|| "?".to_string())
             };
             (
                 mode,
@@ -211,19 +214,29 @@ impl ZellijPlugin for State {
     }
 
     fn update(&mut self, event: Event) -> bool {
+        if self.is_updating {
+            eprintln!("Warning: Skipping update due to reentrancy (event: {:?})", std::mem::discriminant(&event));
+            return false;
+        }
+        
+        self.is_updating = true;
         let mut should_render = false;
         match event {
             Event::RunCommandResult(_exit_code, _stdout, _stderr, _context) => {
                 if let Some(value) = _context.get("type") {
                     let value: &str = value.as_ref();
                     if value == "pwd" {
-                        self.session_directory = std::str::from_utf8(_stdout.as_slice())
-                            .unwrap()
-                            .trim()
-                            .split('/')
-                            .next_back()
-                            .unwrap()
-                            .to_string();
+                        if let Ok(stdout_str) = std::str::from_utf8(_stdout.as_slice()) {
+                            self.session_directory = stdout_str
+                                .trim()
+                                .split('/')
+                                .next_back()
+                                .unwrap_or("unknown")
+                                .to_string();
+                        } else {
+                            eprintln!("Warning: Failed to parse pwd command output");
+                            self.session_directory = "unknown".to_string();
+                        }
                     }
                 }
                 should_render = true;
@@ -238,15 +251,28 @@ impl ZellijPlugin for State {
                 should_render = true;
             }
             Event::TabUpdate(tabs) => {
-                self.active_tab_idx = tabs.iter().position(|t| t.active).unwrap() + 1;
-                self.tabs = tabs;
-                should_render = true;
+                if let Some(active_pos) = tabs.iter().position(|t| t.active) {
+                    self.active_tab_idx = active_pos + 1;
+                    self.tabs = tabs;
+                    should_render = true;
+                } else {
+                    eprintln!("Warning: No active tab found in TabUpdate event");
+                    if !tabs.is_empty() {
+                        self.tabs = tabs;
+                        self.active_tab_idx = 1;
+                        should_render = true;
+                    }
+                }
             }
             Event::Mouse(me) => match me {
                 Mouse::LeftClick(_, col) => {
                     let tab_to_focus = get_tab_to_focus(&self.tab_line, self.active_tab_idx, col);
                     if let Some(idx) = tab_to_focus {
-                        switch_tab_to(idx.try_into().unwrap());
+                        if let Ok(tab_idx) = idx.try_into() {
+                            switch_tab_to(tab_idx);
+                        } else {
+                            eprintln!("Warning: Invalid tab index for switching: {}", idx);
+                        }
                     }
                 }
                 Mouse::ScrollUp(_) => {
@@ -266,6 +292,8 @@ impl ZellijPlugin for State {
                 eprintln!("Got unrecognized event: {:?}", event);
             }
         };
+        
+        self.is_updating = false;
         should_render
     }
 
@@ -290,8 +318,10 @@ impl ZellijPlugin for State {
             is_alternate_tab = !is_alternate_tab;
             all_tabs.push(tab);
         }
+        let session_name = self.mode_info.session_name.clone()
+            .unwrap_or_else(|| "Unknown Session".to_string());
         self.tab_line = tab_line(
-            self.mode_info.session_name.clone().unwrap(),
+            session_name,
             all_tabs,
             active_tab_index,
             cols.saturating_sub(1),

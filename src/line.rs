@@ -76,10 +76,13 @@ fn populate_tabs_in_tab_line(
         // has less width, or if the tab on the other side doesn't fit
         if (total_left <= total_right || !right_fits) && left_fits {
             // add left tab
-            let tab = tabs_before_active.pop().unwrap();
-            middle_size += tab.len;
-            total_left += tab.len;
-            tabs_to_render.insert(0, tab);
+            if let Some(tab) = tabs_before_active.pop() {
+                middle_size += tab.len;
+                total_left += tab.len;
+                tabs_to_render.insert(0, tab);
+            } else {
+                break;
+            }
         } else if right_fits {
             // add right tab
             let tab = tabs_after_active.remove(0);
@@ -210,7 +213,9 @@ fn tab_line_prefix(
         })
     }
 
-    let mut mode_part = user_conf.mode_display.get(&mode).unwrap().to_owned();
+    let mut mode_part = user_conf.mode_display.get(&mode)
+        .unwrap_or(&"?".to_string())
+        .to_owned();
     mode_part.push(' ');
     let mode_part_len = mode_part.width();
     let mode_part_styled_text = match mode {
@@ -240,8 +245,14 @@ pub fn tab_line(
     let mut tabs_before_active = all_tabs;
     let active_tab = if !tabs_after_active.is_empty() {
         tabs_after_active.remove(0)
+    } else if let Some(tab) = tabs_before_active.pop() {
+        tab
     } else {
-        tabs_before_active.pop().unwrap()
+        LinePart {
+            part: "No Tabs".to_string(),
+            len: 7,
+            tab_index: Some(0),
+        }
     };
     let mut prefix = tab_line_prefix(
         session_name,
