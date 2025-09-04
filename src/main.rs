@@ -229,8 +229,9 @@ impl ZellijPlugin for State {
                 should_render = true;
             }
             Event::ModeUpdate(mode_info) => {
+                let config = self.configuration.clone();
                 self.user_configuration = UserConfiguration::populate_from_configuration(
-                    &self.configuration,
+                    &config,
                     &mode_info.style.colors,
                 );
                 self.mode_info = mode_info;
